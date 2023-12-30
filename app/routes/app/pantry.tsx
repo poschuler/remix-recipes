@@ -4,28 +4,43 @@ import {
   json,
 } from "@remix-run/node";
 import {
-  Form,
+  isRouteErrorResponse,
   useFetcher,
   useLoaderData,
-  useNavigation,
-  useSearchParams,
+  useRouteError,
 } from "@remix-run/react";
+import { useRef, useState } from "react";
 import { z } from "zod";
-import { DeleteButton, ErrorMessage, PrimaryButton } from "~/components/form";
-import { PlusIcon, SaveIcon, SearchIcon } from "~/components/icons";
+import {
+  DeleteButton,
+  ErrorMessage,
+  Input,
+  PrimaryButton,
+  SearchBar,
+} from "~/components/form";
+import { PlusIcon, SaveIcon, TrashIcon } from "~/components/icons";
+import {
+  createShelfItem,
+  deleteShelfItem,
+  getShelfItem,
+} from "~/models/pantry-item.server";
 import {
   createShelf,
   deleteShelf,
   getAllShelves,
+  getShelf,
   saveShelfName,
 } from "~/models/pantry-shelf.server";
-import { classNames } from "~/utils/misc";
+import { requireLoggedInUser } from "~/utils/auth.server";
+import { classNames, useIsHydrated, useServerLayoutEffect } from "~/utils/misc";
 import { validateForm } from "~/utils/validation";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const user = await requireLoggedInUser(request);
+
   const url = new URL(request.url);
   const q = url.searchParams.get("q");
-  const shelves = await getAllShelves(q);
+  const shelves = await getAllShelves(user.id, q);
   return json({ shelves });
 };
 
@@ -38,20 +53,42 @@ const deleteShelfSchema = z.object({
   shelfId: z.string(),
 });
 
+const createShelfItemSchema = z.object({
+  shelfId: z.string(),
+  itemName: z.string().min(1, "Item name cannot be blank"),
+});
+
+const deleteShelfItemSchema = z.object({
+  itemId: z.string(),
+});
+
 export const action = async ({ request }: ActionFunctionArgs) => {
+  const user = await requireLoggedInUser(request);
+
   const formData = await request.formData();
   const _action = formData.get("_action");
   //const { _action } = Object.fromEntries(formData);
 
   if (_action === "createShelf") {
-    return createShelf();
+    return createShelf(user.id);
   }
 
   if (_action === "deleteShelf") {
     return validateForm(
       formData,
       deleteShelfSchema,
-      (data) => deleteShelf(data.shelfId),
+      async (data) => {
+        const shelf = await getShelf(data.shelfId);
+        if (shelf !== null && shelf.userId !== user.id) {
+          throw json(
+            {
+              message: "This shelf is not yours, so you cannot delete it",
+            },
+            { status: 401 }
+          );
+        }
+        return deleteShelf(data.shelfId);
+      },
       (errors) => json({ errors }, { status: 400 })
     );
   }
@@ -60,7 +97,49 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return validateForm(
       formData,
       saveShelfNameSchema,
-      (data) => saveShelfName(data.shelfId, data.shelfName),
+      async (data) => {
+        const shelf = await getShelf(data.shelfId);
+        if (shelf !== null && shelf.userId !== user.id) {
+          throw json(
+            {
+              message: "This shelf is not yours, so you cannot change its name",
+            },
+            { status: 401 }
+          );
+        }
+        return saveShelfName(data.shelfId, data.shelfName);
+      },
+      (errors) => json({ errors }, { status: 400 })
+    );
+  }
+
+  if (_action === "createShelfItem") {
+    return validateForm(
+      formData,
+      createShelfItemSchema,
+      (data) => createShelfItem(user.id, data.shelfId, data.itemName),
+      (errors) => json({ errors }, { status: 400 })
+    );
+  }
+
+  if (_action === "deleteShelfItem") {
+    return validateForm(
+      formData,
+      deleteShelfItemSchema,
+      async (data) => {
+        const item = await getShelfItem(data.itemId);
+
+        if (item !== null && item.userId !== user.id) {
+          throw json(
+            {
+              message: "This item is not yours, so you cannot delete it",
+            },
+            { status: 401 }
+          );
+        }
+
+        return deleteShelfItem(data.itemId);
+      },
       (errors) => json({ errors }, { status: 400 })
     );
   }
@@ -86,35 +165,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function Pantry() {
   const data = useLoaderData<typeof loader>();
-  const [searchParams] = useSearchParams();
   const createShelfFetcher = useFetcher();
-  const navigation = useNavigation();
-
-  const isSearching = navigation.formData?.has("q");
   const isCreatingShelf =
     createShelfFetcher.formData?.get("_action") === "createShelf";
 
   return (
     <div>
-      <Form
-        className={classNames(
-          "flex border-2 border-gray-300 rounded-md",
-          "focus-within:border-primary md:w-80",
-          isSearching ? "animate-pulse" : ""
-        )}
-      >
-        <button className="px-2 mr-1">
-          <SearchIcon />
-        </button>
-        <input
-          defaultValue={searchParams.get("q") ?? ""}
-          type="text"
-          name="q"
-          autoComplete="false"
-          placeholder="Search Shelves..."
-          className="w-full py-3 px-2 outline-none"
-        />
-      </Form>
+      <SearchBar placeholder="Search Shelves..." className="md:w-80" />
 
       <createShelfFetcher.Form method="post">
         <PrimaryButton
@@ -145,6 +202,10 @@ export default function Pantry() {
   );
 }
 
+// type LoaderData = {
+//   shelves: Awaited<ReturnType<typeof getAllShelves>>;
+// };
+
 type ShelfProps = {
   shelf: {
     id: string;
@@ -154,11 +215,19 @@ type ShelfProps = {
       name: string;
     }[];
   };
+  // shelves: LoaderData["shelves"][number];
 };
 
 function Shelf({ shelf }: ShelfProps) {
-  const deleteShelfFetcher = useFetcher();
+  const deleteShelfFetcher = useFetcher<any>();
   const saveShelfNameFetcher = useFetcher<any>();
+  const createShelfItemFetcher = useFetcher<any>();
+  const createItemFormRef = useRef<HTMLFormElement>(null);
+  const { renderedItems, addItem } = useOptimisticItems(
+    shelf.pantryItems,
+    createShelfItemFetcher.state
+  );
+  const isHydrated = useIsHydrated();
 
   const isDeletingShelf =
     deleteShelfFetcher.formData?.get("_action") === "deleteShelf" &&
@@ -174,41 +243,122 @@ function Shelf({ shelf }: ShelfProps) {
       )}
     >
       <saveShelfNameFetcher.Form method="post" className="flex">
-        <div className="w-full mb-2">
-          <input
+        <div className="w-full mb-2 peer">
+          <Input
             type="text"
+            required
             name="shelfName"
             placeholder="Shelf Name"
+            aria-label="Shelf name"
             autoComplete="off"
             defaultValue={shelf.name}
-            className={classNames(
-              "text-2xl font-extrabold w-full outline-none",
-              "border-b-2 border-b-background focus:border-b-primary",
-              saveShelfNameFetcher.data?.errors?.shelfName
-                ? "border-b-red-600"
-                : ""
-            )}
+            className="text-2xl font-extrabold"
+            error={!!saveShelfNameFetcher.data?.errors?.shelfName}
+            onChange={(event) =>
+              event.target.value !== "" &&
+              saveShelfNameFetcher.submit(
+                {
+                  _action: "saveShelfName",
+                  shelfName: event.target.value,
+                  shelfId: shelf.id,
+                },
+                { method: "post" }
+              )
+            }
           />
           <ErrorMessage>
             {saveShelfNameFetcher.data?.errors?.shelfName}
           </ErrorMessage>
         </div>
-        <button name="_action" value="saveShelfName" className="ml-4">
+        {isHydrated ? null : (
+          <button
+            name="_action"
+            value="saveShelfName"
+            className={classNames(
+              "ml-4 opacity-0 hover:opacity-100 focus:opacity-100",
+              "peer-focus-within:opacity-100"
+            )}
+          >
+            <SaveIcon />
+          </button>
+        )}
+        <input type="hidden" name="shelfId" value={shelf.id} />
+        <ErrorMessage className="pl-2">
+          {saveShelfNameFetcher.data?.errors?.shelfId}
+        </ErrorMessage>
+      </saveShelfNameFetcher.Form>
+
+      <createShelfItemFetcher.Form
+        method="post"
+        className="flex py-2"
+        ref={createItemFormRef}
+        onSubmit={(event) => {
+          const target = event.target as HTMLFormElement;
+          const itemNameInput = target.elements.namedItem(
+            "itemName"
+          ) as HTMLInputElement;
+          addItem(itemNameInput.value);
+          event.preventDefault();
+          createShelfItemFetcher.submit(
+            {
+              itemName: itemNameInput.value,
+              shelfId: shelf.id,
+              _action: "createShelfItem",
+            },
+            { method: "post" }
+          );
+          createItemFormRef.current?.reset();
+        }}
+      >
+        <div className="w-full mb-2 peer">
+          <input
+            type="text"
+            required
+            name="itemName"
+            placeholder="New Item"
+            autoComplete="off"
+            className={classNames(
+              "w-full outline-none",
+              "border-b-2 border-b-background focus:border-b-primary",
+              createShelfItemFetcher.data?.errors?.itemName
+                ? "border-b-red-600"
+                : ""
+            )}
+          />
+          <ErrorMessage>
+            {createShelfItemFetcher.data?.errors?.itemName}
+          </ErrorMessage>
+        </div>
+        <button
+          name="_action"
+          value="createShelfItem"
+          className={classNames(
+            "ml-4 opacity-0 hover:opacity-100 focus:opacity-100",
+            "peer-focus-within:opacity-100"
+          )}
+        >
           <SaveIcon />
         </button>
         <input type="hidden" name="shelfId" value={shelf.id} />
         <ErrorMessage className="pl-2">
           {saveShelfNameFetcher.data?.errors?.shelfId}
         </ErrorMessage>
-      </saveShelfNameFetcher.Form>
+      </createShelfItemFetcher.Form>
+
       <ul>
-        {shelf.pantryItems.map((item) => (
-          <li key={item.id} className="py-2">
-            {item.name}
-          </li>
+        {renderedItems.map((item) => (
+          <ShelfItem key={item.id} shelfItem={item} />
         ))}
       </ul>
-      <deleteShelfFetcher.Form method="post" className="pt-8">
+      <deleteShelfFetcher.Form
+        method="post"
+        className="pt-8"
+        onSubmit={(event) => {
+          if (!confirm("Are you sure you want to delete this shelf")) {
+            event.preventDefault();
+          }
+        }}
+      >
         <input type="hidden" name="shelfId" value={shelf.id} />
         <ErrorMessage className="pb-2">
           {deleteShelfFetcher.data?.errors?.shelfId}
@@ -218,5 +368,96 @@ function Shelf({ shelf }: ShelfProps) {
         </DeleteButton>
       </deleteShelfFetcher.Form>
     </li>
+  );
+}
+
+type ShelfItemProps = {
+  shelfItem: RenderedItem;
+};
+
+function ShelfItem({ shelfItem }: ShelfItemProps) {
+  const deleteShelfItemFetcher = useFetcher<any>();
+  const isDeletingItem = !!deleteShelfItemFetcher.formData;
+
+  return isDeletingItem ? null : (
+    <li className="py-2">
+      <deleteShelfItemFetcher.Form method="post" className="flex">
+        <p className="w-full" aria-label={`${shelfItem.name}`}>
+          {shelfItem.name}
+        </p>
+        {shelfItem.isOptimistic ? null : (
+          <button
+            name="_action"
+            value="deleteShelfItem"
+            aria-label={`delete ${shelfItem.name}`}
+          >
+            <TrashIcon />
+          </button>
+        )}
+        <input type="hidden" name="itemId" value={shelfItem.id} />
+        <ErrorMessage className="pb-2">
+          {deleteShelfItemFetcher.data?.errors?.itemId}
+        </ErrorMessage>
+      </deleteShelfItemFetcher.Form>
+    </li>
+  );
+}
+
+type RenderedItem = {
+  id: string;
+  name: string;
+  isOptimistic?: boolean;
+};
+
+function useOptimisticItems(
+  savedItems: RenderedItem[],
+  createShelfItemState: "idle" | "submitting" | "loading"
+) {
+  const [optimisticItems, setOptimisticItems] = useState<RenderedItem[]>([]);
+  const renderedItems = [...optimisticItems, ...savedItems];
+
+  renderedItems.sort((a, b) => {
+    if (a.name === b.name) return 0;
+    return a.name < b.name ? -1 : 1;
+  });
+
+  useServerLayoutEffect(() => {
+    if (createShelfItemState === "idle") {
+      setOptimisticItems([]);
+    }
+  }, [createShelfItemState]);
+
+  const addItem = (name: string) => {
+    setOptimisticItems((items) => [
+      ...items,
+      { id: createItemId(), name, isOptimistic: true },
+    ]);
+  };
+
+  return { renderedItems, addItem };
+}
+
+function createItemId() {
+  return `${Math.round(Math.random() * 1_000_000)}`;
+}
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+
+  if (isRouteErrorResponse(error)) {
+    return (
+      <div className="bg-red-600 text-white rounded-md p-4">
+        <h1 className="mb-2">
+          {error.status} - {error.statusText}
+        </h1>
+        <p>{error.data.message}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-red-600 text-white rounded-md p-4">
+      <h1 className="mb-2">An unexpected error occurred</h1>
+    </div>
   );
 }

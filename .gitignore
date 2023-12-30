@@ -3,5 +3,10 @@ node_modules
 /.cache
 /build
 /public/build
+/public/images
 .env
 postgres-data
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

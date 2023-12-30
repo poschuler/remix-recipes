@@ -1,4 +1,9 @@
-import type { LinksFunction, MetaFunction } from "@remix-run/node";
+import {
+  json,
+  type LinksFunction,
+  type LoaderFunctionArgs,
+  type MetaFunction,
+} from "@remix-run/node";
 import stylesheet from "~/tailwind.css";
 
 import {
@@ -11,17 +16,20 @@ import {
   Scripts,
   ScrollRestoration,
   isRouteErrorResponse,
+  useLoaderData,
   useNavigation,
   useResolvedPath,
   useRouteError,
 } from "@remix-run/react";
 import {
   DiscoverIcon,
-  HomeIcon,
+  LoginIcon,
+  LogoutIcon,
   RecipeBookIcon,
   SettingsIcon,
 } from "~/components/icons";
 import { classNames } from "~/utils/misc";
+import { getCurrentUser } from "~/utils/auth.server";
 
 export const meta: MetaFunction = () => {
   return [
@@ -31,10 +39,19 @@ export const meta: MetaFunction = () => {
 };
 
 export const links: LinksFunction = () => [
+  { rel: "stylesheet", href: "/theme.css" },
   { rel: "stylesheet", href: stylesheet },
 ];
 
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const user = await getCurrentUser(request);
+
+  return json({ isLoggedIn: user !== null });
+};
+
 export default function App() {
+  const data = useLoaderData<typeof loader>();
+
   return (
     <html lang="en">
       <head>
@@ -44,23 +61,36 @@ export default function App() {
         <Links />
       </head>
       <body className="md:flex md:h-screen bg-background">
-        <nav className="bg-primary text-white">
+        <nav
+          className={classNames(
+            "bg-primary text-white",
+            "flex justify-between md:flex-col"
+          )}
+        >
           <ul className="flex md:flex-col">
-            <AppNavLink to="/">
-              <HomeIcon />
-            </AppNavLink>
-
             <AppNavLink to="discover">
               <DiscoverIcon />
             </AppNavLink>
 
-            <AppNavLink to="app">
-              <RecipeBookIcon />
-            </AppNavLink>
-
+            {data.isLoggedIn ? (
+              <AppNavLink to="app/recipes">
+                <RecipeBookIcon />
+              </AppNavLink>
+            ) : null}
             <AppNavLink to="settings">
               <SettingsIcon />
             </AppNavLink>
+          </ul>
+          <ul>
+            {data.isLoggedIn ? (
+              <AppNavLink to="/logout">
+                <LogoutIcon />
+              </AppNavLink>
+            ) : (
+              <AppNavLink to="/login">
+                <LoginIcon />
+              </AppNavLink>
+            )}
           </ul>
         </nav>
         <div className="p-4 w-full md:w-[calc(100%-4rem)]">
