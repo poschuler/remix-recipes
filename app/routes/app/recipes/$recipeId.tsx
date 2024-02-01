@@ -7,6 +7,7 @@ import {
   unstable_createMemoryUploadHandler,
   unstable_createFileUploadHandler,
   unstable_composeUploadHandlers,
+  UploadHandler,
 } from "@remix-run/node";
 import {
   Form,
@@ -42,6 +43,7 @@ import {
   useDebouncedFunction,
   useServerLayoutEffect,
 } from "~/utils/misc";
+import { uploadImage } from "~/utils/util.server";
 import { validateForm } from "~/utils/validation";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -130,20 +132,35 @@ const createIngredientSchema = z.object({
   newIngredientName: z.string().min(1, "Name cannot be blank"),
 });
 
+// const cloudinaryUploadHandler = async ({ name, data }) => {
+//   if (name !== "file") return;
+
+//   return "";
+// };
+
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const recipeId = String(params.recipeId);
   await canChangeRecipe(request, recipeId);
 
   let formData;
   if (request.headers.get("Content-Type")?.includes("multipart/form-data")) {
-    const uploadHandler = unstable_composeUploadHandlers(
-      unstable_createFileUploadHandler({ directory: "public/images" }),
+    const uploadHandler: UploadHandler = unstable_composeUploadHandlers(
+      async ({ name, data }) => {
+        if (name !== "image") {
+          return undefined;
+        }
+        const uploadedImage = await uploadImage(data);
+        return uploadedImage.secure_url;
+      },
       unstable_createMemoryUploadHandler()
     );
+
     formData = await unstable_parseMultipartFormData(request, uploadHandler);
-    const image = formData.get("image") as File;
-    if (image.size !== 0) {
-      formData.set("imageUrl", `/images/${image.name}`);
+    const imgSrc = formData.get("image") as File;
+    const imgDesc = formData.get("desc");
+
+    if (imgSrc) {
+      formData.set("imageUrl", imgSrc);
     }
   } else {
     formData = await request.formData();

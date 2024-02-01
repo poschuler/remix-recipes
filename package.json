@@ -19,6 +19,7 @@
     "@remix-run/react": "^2.5.1",
     "@remix-run/serve": "^2.5.1",
     "@remix-run/v1-route-convention": "^0.1.4",
+    "cloudinary": "^2.0.0",
     "cross-env": "^7.0.3",
     "cryptr": "^6.3.0",
     "form-data": "^4.0.0",
