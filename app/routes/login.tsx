@@ -36,12 +36,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       const link = generateMagicLink(data.email, nonce);
       //console.log(link);
-      await sendMagicLinkEmail(link, data.email);
-      return json("ok", {
-        headers: {
-          "Set-Cookie": await commitSession(session),
-        },
-      });
+      //await sendMagicLinkEmail(link, data.email);
+      return json(
+        { ok: "ok", link },
+        {
+          headers: {
+            "Set-Cookie": await commitSession(session),
+          },
+        }
+      );
     },
     (errors) => json({ errors, email: formData.get("email") }, { status: 400 })
   );
@@ -52,31 +55,40 @@ export default function Login() {
 
   return (
     <div className="text-center mt-36">
-      {actionData === "ok" ? (
+      {/* {actionData === "ok" ? (
         <div>
           <h1 className="text-2xl py-8">Yum!</h1>
           <p>
             Check your email and follow the instructions to finish logging in.
           </p>
         </div>
-      ) : (
-        <div>
-          <h1 className="text-3xl mb-8">Remix Recipes</h1>
-          <form method="post" className="mx-auto md:w-1/3">
-            <div className="text-left pb-4">
-              <PrimaryInput
-                type="email"
-                name="email"
-                placeholder="Email"
-                autoComplete="off"
-                defaultValue={actionData?.email}
-              />
-              <ErrorMessage>{actionData?.errors?.email}</ErrorMessage>
-            </div>
-            <PrimaryButton className="w-1/3 mx-auto">Log In</PrimaryButton>
-          </form>
-        </div>
-      )}
+      ) : ( */}
+      <div>
+        <h1 className="text-3xl">Remix Recipes</h1>
+        <h1 className="text-base mb-8">(me@example.com)</h1>
+        <form method="post" className="mx-auto md:w-1/3">
+          <div className="text-left pb-4">
+            <PrimaryInput
+              type="email"
+              name="email"
+              placeholder="Email"
+              autoComplete="off"
+              defaultValue={actionData?.email}
+            />
+            <ErrorMessage>{actionData?.errors?.email}</ErrorMessage>
+          </div>
+          <PrimaryButton className="w-1/3 mx-auto">Log In</PrimaryButton>
+        </form>
+
+        {actionData?.ok === "ok" ? (
+          <a href={actionData?.link}>
+            <h1 className="text-xl mt-4">
+              Magic link generated, please click to enter
+            </h1>
+            <h1>Click here to enter</h1>
+          </a>
+        ) : null}
+      </div>
     </div>
   );
 }

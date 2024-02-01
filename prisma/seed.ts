@@ -5,8 +5,8 @@ async function createUser() {
   return db.user.create({
     data: {
       email: "me@example.com",
-      firstName: "Paul",
-      lastName: "Osorio",
+      firstName: "Example",
+      lastName: "Account",
     },
   });
 }
